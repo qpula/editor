@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Editor de Fotos (Zoom + Arrastre + Zoom inicial)</title>
+<style>
+  body {
+    font-family: Arial, sans-serif;
+    background: #f2f2f2;
+    margin: 0;
+    padding: 0;
+  }
+  h1 {
+    text-align: center;
+    padding: 15px;
+    background: #007BFF;
+    color: white;
+    margin: 0;
+  }
+  .editor {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 20px;
+    padding: 20px;
+    max-width: 1200px;
+    margin: auto;
+  }
+  .preview-area {
+    flex: 2;
+    position: relative;
+    border: 2px dashed #aaa;
+    border-radius: 10px;
+    background: #fff;
+    overflow: hidden;
+    height: 600px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    cursor: grab;
+  }
+  .preview-area:active {
+    cursor: grabbing;
+  }
+  .preview {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform-origin: center;
+    max-width: none;
+    max-height: none;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+  .controls {
+    flex: 1;
+    background: #fff;
+    border-radius: 10px;
+    padding: 15px;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+    height: fit-content;
+  }
+  .controls h2 {
+    text-align: center;
+    margin-bottom: 15px;
+  }
+  .controls label {
+    display: block;
+    margin: 10px 0 5px;
+    font-weight: bold;
+  }
+  input[type="range"] {
+    width: 100%;
+  }
+  .buttons {
+    text-align: center;
+    margin-top: 15px;
+  }
+  button {
+    padding: 10px 15px;
+    margin: 5px;
+    border: none;
+    border-radius: 5px;
+    background: #007BFF;
+    color: white;
+    font-weight: bold;
+    cursor: pointer;
+  }
+  button:hover {
+    background: #0056b3;
+  }
+  .file-input {
+    text-align: center;
+    margin-bottom: 15px;
+  }
+</style>
+</head>
+<body>
+<h1>Editor de Fotos (Zoom + Arrastre + Zoom inicial)</h1>
+<div class="editor">
+  <!-- Área de previsualización -->
+  <div class="preview-area" id="cropArea">
+    <img id="preview" class="preview" src="" alt="Previsualización" draggable="false" />
+  </div>
+
+  <!-- Controles -->
+  <div class="controls">
+    <div class="file-input">
+      <input type="file" id="fileInput" accept="image/*" />
+    </div>
+    <h2>Controles</h2>
+    <label for="brillo">Brillo</label>
+    <input type="range" id="brillo" min="0" max="200" value="100" />
+
+    <label for="contraste">Contraste</label>
+    <input type="range" id="contraste" min="0" max="200" value="100" />
+
+    <label for="saturacion">Saturación</label>
+    <input type="range" id="saturacion" min="0" max="200" value="100" />
+
+    <label for="grises">Escala de grises</label>
+    <input type="range" id="grises" min="0" max="100" value="0" />
+
+    <label for="matiz">Matiz (Hue)</label>
+    <input type="range" id="matiz" min="0" max="360" value="0" />
+
+    <label for="zoom">Zoom</label>
+    <input type="range" id="zoom" min="50" max="300" value="100" />
+
+    <div class="buttons">
+      <button id="reset">Resetear</button>
+      <button id="download">Descargar Imagen</button>
+    </div>
+  </div>
+</div>
+
+<!-- Canvas oculto para exportar -->
+<canvas id="canvas" style="display:none;"></canvas>
+
+<script>
+  const fileInput = document.getElementById('fileInput');
+  const preview = document.getElementById('preview');
+  const cropArea = document.getElementById('cropArea');
+
+  const brillo = document.getElementById('brillo');
+  const contraste = document.getElementById('contraste');
+  const saturacion = document.getElementById('saturacion');
+  const grises = document.getElementById('grises');
+  const matiz = document.getElementById('matiz');
+  const zoom = document.getElementById('zoom');
+
+  const resetBtn = document.getElementById('reset');
+  const downloadBtn = document.getElementById('download');
+  const canvas = document.getElementById('canvas');
+
+  let filtros = {
+    brillo: 100,
+    contraste: 100,
+    saturacion: 100,
+    grises: 0,
+    matiz: 0,
+    zoom: 100
+  };
+
+  let imgPos = { x: 0, y: 0 };
+  let startDrag = { x: 0, y: 0 };
+  let isDragging = false;
+  let baseZoom = 100; // Zoom inicial calculado
+
+  // Cargar imagen
+  fileInput.addEventListener('change', e => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        preview.onload = () => {
+          ajustarZoomInicial();
+          imgPos.x = 0;
+          imgPos.y = 0;
+          aplicarFiltros();
+        };
+        preview.src = reader.result;
+      };
+      reader.readAsDataURL(file);
+    }
+  });
+
+  // Ajustar zoom inicial para que la imagen entre completa
+  function ajustarZoomInicial() {
+    const cropWidth = cropArea.clientWidth;
+    const cropHeight = cropArea.clientHeight;
+    const imgWidth = preview.naturalWidth;
+    const imgHeight = preview.naturalHeight;
+
+    const scaleFit = Math.min(cropWidth / imgWidth, cropHeight / imgHeight);
+    baseZoom = scaleFit * 100; // % base
+    filtros.zoom = baseZoom;
+    zoom.value = baseZoom;
+  }
+
+  // Aplicar filtros visualmente
+  const aplicarFiltros = () => {
+    preview.style.filter = `
+      brightness(${filtros.brillo}%)
+      contrast(${filtros.contraste}%)
+      saturate(${filtros.saturacion}%)
+      grayscale(${filtros.grises}%)
+      hue-rotate(${filtros.matiz}deg)
+    `;
+    preview.style.transform = `
+      translate(calc(-50% + ${imgPos.x}px), calc(-50% + ${imgPos.y}px)) 
+      scale(${filtros.zoom / 100})
+    `;
+  };
+
+  // Eventos de control
+  [brillo, contraste, saturacion, grises, matiz, zoom].forEach(ctrl => {
+    ctrl.addEventListener('input', () => {
+      filtros[ctrl.id] = ctrl.value;
+      aplicarFiltros();
+    });
+  });
+
+  // Arrastrar imagen con mouse
+  cropArea.addEventListener('mousedown', e => {
+    if (!preview.src) return;
+    isDragging = true;
+    startDrag.x = e.clientX - imgPos.x;
+    startDrag.y = e.clientY - imgPos.y;
+  });
+  document.addEventListener('mouseup', () => {
+    isDragging = false;
+  });
+  document.addEventListener('mousemove', e => {
+    if (isDragging) {
+      imgPos.x = e.clientX - startDrag.x;
+      imgPos.y = e.clientY - startDrag.y;
+      limitarPosicion();
+      aplicarFiltros();
+    }
+  });
+
+  // Arrastrar imagen con touch
+  cropArea.addEventListener('touchstart', e => {
+    if (!preview.src) return;
+    isDragging = true;
+    const touch = e.touches[0];
+    startDrag.x = touch.clientX - imgPos.x;
+    startDrag.y = touch.clientY - imgPos.y;
+  });
+  cropArea.addEventListener('touchend', () => {
+    isDragging = false;
+  });
+  cropArea.addEventListener('touchmove', e => {
+    if (isDragging) {
+      const touch = e.touches[0];
+      imgPos.x = touch.clientX - startDrag.x;
+      imgPos.y = touch.clientY - startDrag.y;
+      limitarPosicion();
+      aplicarFiltros();
+    }
+  });
+
+  // Limitar que la imagen no se salga mucho del área visible
+  function limitarPosicion() {
+    const cropWidth = cropArea.clientWidth;
+    const cropHeight = cropArea.clientHeight;
+    const imgWidth = preview.naturalWidth * (filtros.zoom / 100);
+    const imgHeight = preview.naturalHeight * (filtros.zoom / 100);
+
+    // Máximos para que no se vea fondo vacío
+    const maxX = (imgWidth - cropWidth) / 2;
+    const maxY = (imgHeight - cropHeight) / 2;
+
+    if (imgWidth <= cropWidth) {
+      // Imagen más chica que recorte: centrar horizontal
+      imgPos.x = 0;
+    } else {
+      if (imgPos.x > maxX) imgPos.x = maxX;
+      if (imgPos.x < -maxX) imgPos.x = -maxX;
+    }
+
+    if (imgHeight <= cropHeight) {
+      // Imagen más chica que recorte: centrar vertical
+      imgPos.y = 0;
+    } else {
+      if (imgPos.y > maxY) imgPos.y = maxY;
+      if (imgPos.y < -maxY) imgPos.y = -maxY;
+    }
+  }
+
+  // Resetear
+  resetBtn.addEventListener('click', () => {
+    filtros = { brillo: 100, contraste: 100, saturacion: 100, grises: 0, matiz: 0, zoom: baseZoom };
+    brillo.value = 100;
+    contraste.value = 100;
+    saturacion.value = 100;
+    grises.value = 0;
+    matiz.value = 0;
+    zoom.value = baseZoom;
+    imgPos = { x: 0, y: 0 };
+    aplicarFiltros();
+  });
+
+  // Descargar imagen editada
+  downloadBtn.addEventListener('click', () => {
+    if (!preview.src) return alert('Primero carga una imagen.');
+
+    const ctx = canvas.getContext('2d');
+    const cropWidth = cropArea.clientWidth;
+    const cropHeight = cropArea.clientHeight;
+
+    const scaleFactor = 3; // Para alta calidad
+    canvas.width = cropWidth * scaleFactor;
+    canvas.height = cropHeight * scaleFactor;
+
+    const img = new Image();
+    img.crossOrigin = "anonymous"; // Por si la imagen es externa
+    img.src = preview.src;
+    img.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.filter = `
+        brightness(${filtros.brillo}%)
+        contrast(${filtros.contraste}%)
+        saturate(${filtros.saturacion}%)
+        grayscale(${filtros.grises}%)
+        hue-rotate(${filtros.matiz}deg)
+      `;
+
+      // Ajustar posición y zoom en canvas
+      ctx.translate(canvas.width / 2 + imgPos.x * scaleFactor, canvas.height / 2 + imgPos.y * scaleFactor);
+      ctx.scale((filtros.zoom / 100) * scaleFactor, (filtros.zoom / 100) * scaleFactor);
+
+      ctx.drawImage(img, -img.width / 2, -img.height / 2);
+
+      const link = document.createElement('a');
+      link.download = 'imagen_editada.png';
+      link.href = canvas.toDataURL('image/png', 1.0);
+      link.click();
+    };
+  });
+</script>
+</body>
+</html>
